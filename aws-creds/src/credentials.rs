@@ -669,6 +669,10 @@ aws_secret_access_key = SECRET
     #[cfg(feature = "http-credentials")]
     #[test]
     fn test_get_container_authorization_token_from_file() {
+        let _lock = CONTAINER_CREDENTIALS_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"token-from-file").unwrap();
         file.flush().unwrap();
@@ -684,6 +688,10 @@ aws_secret_access_key = SECRET
     #[cfg(feature = "http-credentials")]
     #[test]
     fn test_get_container_authorization_token_from_env() {
+        let _lock = CONTAINER_CREDENTIALS_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
         let _guard = EnvGuard::set("AWS_CONTAINER_AUTHORIZATION_TOKEN", "token-from-env");
         let _u = EnvGuard::remove(&["AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"]);
         assert_eq!(
@@ -695,6 +703,10 @@ aws_secret_access_key = SECRET
     #[cfg(feature = "http-credentials")]
     #[test]
     fn test_get_container_authorization_token_file_precedence() {
+        let _lock = CONTAINER_CREDENTIALS_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"token-from-file").unwrap();
         file.flush().unwrap();
