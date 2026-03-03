@@ -536,7 +536,13 @@ struct CredentialsFromInstanceMetadata {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::sync::Mutex;
+    use std::sync::OnceLock;
     use tempfile::NamedTempFile;
+
+    /// Serializes container-credentials tests that touch RELATIVE_URI/FULL_URI so parallel runs don't race.
+    #[cfg(feature = "http-credentials")]
+    static CONTAINER_CREDENTIALS_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn create_test_credentials_file(content: &str) -> NamedTempFile {
         let mut file = NamedTempFile::new().unwrap();
@@ -605,6 +611,10 @@ aws_secret_access_key = SECRET
     #[cfg(feature = "http-credentials")]
     #[test]
     fn test_container_credentials_not_container_when_no_env() {
+        let _lock = CONTAINER_CREDENTIALS_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
         let _guard = EnvGuard::remove(&[
             "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
             "AWS_CONTAINER_CREDENTIALS_FULL_URI",
@@ -616,6 +626,10 @@ aws_secret_access_key = SECRET
     #[cfg(feature = "http-credentials")]
     #[test]
     fn test_container_credentials_relative_uri_precedence() {
+        let _lock = CONTAINER_CREDENTIALS_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
         let _guard = EnvGuard::set(
             "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
             "/v2/credentials/x",
@@ -635,6 +649,10 @@ aws_secret_access_key = SECRET
     #[cfg(feature = "http-credentials")]
     #[test]
     fn test_container_credentials_full_uri_used_when_no_relative() {
+        let _lock = CONTAINER_CREDENTIALS_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
         let _guard = EnvGuard::set(
             "AWS_CONTAINER_CREDENTIALS_FULL_URI",
             "http://169.254.170.23/v1/credentials",
