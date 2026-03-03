@@ -575,15 +575,11 @@ aws_access_key_id = ENV_KEY
 aws_secret_access_key = ENV_SECRET
 "#;
         let file = create_test_credentials_file(content);
-
-        // Set the environment variable
-        env::set_var("AWS_SHARED_CREDENTIALS_FILE", file.path());
+        let path = file.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::set("AWS_SHARED_CREDENTIALS_FILE", &path);
 
         let creds = Credentials::from_profile(None).unwrap();
         assert_eq!(creds.access_key.unwrap(), "ENV_KEY");
-
-        // Clean up
-        env::remove_var("AWS_SHARED_CREDENTIALS_FILE");
     }
 
     #[test]
