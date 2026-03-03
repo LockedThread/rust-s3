@@ -604,6 +604,135 @@ aws_secret_access_key = SECRET
             CredentialsError::ConfigNotFound
         ));
     }
+
+    // Container credentials (RELATIVE_URI, FULL_URI, authorization token) - require http-credentials
+    #[cfg(feature = "http-credentials")]
+    #[test]
+    fn test_container_credentials_not_container_when_no_env() {
+        let _guard = EnvGuard::remove(&[
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+        ]);
+        let result = Credentials::from_container_credentials_provider();
+        assert!(matches!(result, Err(CredentialsError::NotContainer)));
+    }
+
+    #[cfg(feature = "http-credentials")]
+    #[test]
+    fn test_container_credentials_relative_uri_precedence() {
+        let _guard = EnvGuard::set(
+            "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+            "/v2/credentials/x",
+        );
+        let _guard2 = EnvGuard::set(
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            "http://169.254.170.23/v1/credentials",
+        );
+        // With both set, RELATIVE_URI is used. Short timeout so request fails fast (no server).
+        let _timeout = set_request_timeout(Some(Duration::from_millis(10)));
+        let result = Credentials::from_container_credentials_provider();
+        let _ = set_request_timeout(_timeout);
+        assert!(result.is_err());
+        assert!(!matches!(result, Err(CredentialsError::NotContainer)));
+    }
+
+    #[cfg(feature = "http-credentials")]
+    #[test]
+    fn test_container_credentials_full_uri_used_when_no_relative() {
+        let _guard = EnvGuard::set(
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            "http://169.254.170.23/v1/credentials",
+        );
+        let _rel = EnvGuard::remove(&["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"]);
+        // FULL_URI is used; short timeout so request fails fast (no server).
+        let _timeout = set_request_timeout(Some(Duration::from_millis(10)));
+        let result = Credentials::from_container_credentials_provider();
+        let _ = set_request_timeout(_timeout);
+        assert!(result.is_err());
+        assert!(!matches!(result, Err(CredentialsError::NotContainer)));
+    }
+
+    #[cfg(feature = "http-credentials")]
+    #[test]
+    fn test_get_container_authorization_token_from_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"token-from-file").unwrap();
+        file.flush().unwrap();
+        let path = file.path().to_string_lossy().to_string();
+        let _guard = EnvGuard::set("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", &path);
+        let _u = EnvGuard::remove(&["AWS_CONTAINER_AUTHORIZATION_TOKEN"]);
+        assert_eq!(
+            get_container_authorization_token(),
+            Some("token-from-file".to_string())
+        );
+    }
+
+    #[cfg(feature = "http-credentials")]
+    #[test]
+    fn test_get_container_authorization_token_from_env() {
+        let _guard = EnvGuard::set("AWS_CONTAINER_AUTHORIZATION_TOKEN", "token-from-env");
+        let _u = EnvGuard::remove(&["AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"]);
+        assert_eq!(
+            get_container_authorization_token(),
+            Some("token-from-env".to_string())
+        );
+    }
+
+    #[cfg(feature = "http-credentials")]
+    #[test]
+    fn test_get_container_authorization_token_file_precedence() {
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(b"token-from-file").unwrap();
+        file.flush().unwrap();
+        let path = file.path().to_string_lossy().to_string();
+        let _guard_file = EnvGuard::set("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", &path);
+        let _guard_env = EnvGuard::set("AWS_CONTAINER_AUTHORIZATION_TOKEN", "token-from-env");
+        // File takes precedence over env var.
+        assert_eq!(
+            get_container_authorization_token(),
+            Some("token-from-file".to_string())
+        );
+    }
+}
+
+/// Restores env vars when dropped. Used in tests to avoid leaking env state.
+#[cfg(test)]
+struct EnvGuard {
+    saved: Vec<(String, Option<String>)>,
+}
+
+#[cfg(test)]
+impl EnvGuard {
+    fn set(key: &str, value: &str) -> Self {
+        let saved = env::var(key).ok();
+        env::set_var(key, value);
+        Self {
+            saved: vec![(key.to_string(), saved)],
+        }
+    }
+    fn remove(keys: &[&str]) -> Self {
+        let mut saved = Vec::with_capacity(keys.len());
+        for key in keys {
+            let key = (*key).to_string();
+            let val = env::var(&key).ok();
+            env::remove_var(&key);
+            saved.push((key, val));
+        }
+        Self { saved }
+    }
+}
+
+#[cfg(test)]
+impl Drop for EnvGuard {
+    fn drop(&mut self) {
+        for (key, value) in &self.saved {
+            if let Some(ref v) = value {
+                env::set_var(key, v);
+            } else {
+                env::remove_var(key);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
