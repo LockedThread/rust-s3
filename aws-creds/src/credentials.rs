@@ -187,6 +187,20 @@ fn http_get(url: &str) -> attohttpc::Result<attohttpc::Response> {
     builder.send()
 }
 
+/// Reads the container authorization token from environment.
+/// Checks `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` first (file path), then
+/// `AWS_CONTAINER_AUTHORIZATION_TOKEN`. Used when fetching credentials from
+/// `AWS_CONTAINER_CREDENTIALS_FULL_URI` (e.g. EKS Pod Identity Agent).
+#[cfg(feature = "http-credentials")]
+fn get_container_authorization_token() -> Option<String> {
+    if let Ok(path) = env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE") {
+        if let Ok(token) = std::fs::read_to_string(path) {
+            return Some(token.trim_end().to_string());
+        }
+    }
+    env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN").ok()
+}
+
 impl Credentials {
     pub fn refresh(&mut self) -> Result<(), CredentialsError> {
         if let Some(expiration) = self.expiration {
@@ -327,18 +341,30 @@ impl Credentials {
         Credentials::from_env_specific(None, None, None, None)
     }
 
+    /// Load credentials from container metadata (ECS task role or EKS Pod Identity).
+    ///
+    /// Checks `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` first (ECS), then
+    /// `AWS_CONTAINER_CREDENTIALS_FULL_URI` (EKS Pod Identity Agent, etc.).
+    /// When using `FULL_URI`, optionally sends an `Authorization` header from
+    /// `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` or `AWS_CONTAINER_AUTHORIZATION_TOKEN`.
     #[cfg(feature = "http-credentials")]
     pub fn from_container_credentials_provider() -> Result<Credentials, CredentialsError> {
-        let Ok(credentials_path) = env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") else {
-            return Err(CredentialsError::NotContainer);
-        };
+        let (url, auth_token) =
+            if let Ok(relative_uri) = env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") {
+                (format!("http://169.254.170.2{}", relative_uri), None)
+            } else if let Ok(full_uri) = env::var("AWS_CONTAINER_CREDENTIALS_FULL_URI") {
+                let token = get_container_authorization_token();
+                (full_uri, token)
+            } else {
+                return Err(CredentialsError::NotContainer);
+            };
 
-        let resp: CredentialsFromInstanceMetadata = apply_timeout(attohttpc::get(format!(
-            "http://169.254.170.2{}",
-            credentials_path
-        )))
-        .send()?
-        .json()?;
+        let mut request = apply_timeout(attohttpc::get(&url));
+        if let Some(ref token) = auth_token {
+            request = request.header("Authorization", token.as_str());
+        }
+
+        let resp: CredentialsFromInstanceMetadata = request.send()?.json()?;
 
         Ok(Credentials {
             access_key: Some(resp.access_key_id),
