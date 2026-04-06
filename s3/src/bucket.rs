@@ -3142,6 +3142,28 @@ mod test {
         .with_path_style()
     }
 
+    /// Bucket with hardcoded fake credentials for tests that only exercise
+    /// local signing logic and never hit the network.
+    fn test_presign_bucket() -> Box<Bucket> {
+        Bucket::new(
+            "rust-s3",
+            Region::Custom {
+                region: "us-east-1".to_owned(),
+                endpoint: "http://localhost:9000".to_owned(),
+            },
+            Credentials::new(
+                Some("test_access_key"),
+                Some("test_secret_key"),
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .with_path_style()
+    }
+
     #[allow(dead_code)]
     fn test_digital_ocean_bucket() -> Box<Bucket> {
         Bucket::new("rust-s3", Region::DoFra1, test_digital_ocean_credentials()).unwrap()
@@ -3794,7 +3816,7 @@ mod test {
     )]
     async fn test_presign_put() {
         let s3_path = "/test/test.file";
-        let bucket = test_minio_bucket();
+        let bucket = test_presign_bucket();
 
         let mut custom_headers = HeaderMap::new();
         custom_headers.insert(
@@ -3822,7 +3844,7 @@ mod test {
     async fn test_presign_post() {
         use std::borrow::Cow;
 
-        let bucket = test_minio_bucket();
+        let bucket = test_presign_bucket();
 
         // Policy from sample
         let policy = PostPolicy::new(86400)
@@ -3849,7 +3871,7 @@ mod test {
     )]
     async fn test_presign_get() {
         let s3_path = "/test/test.file";
-        let bucket = test_minio_bucket();
+        let bucket = test_presign_bucket();
 
         let url = bucket.presign_get(s3_path, 86400, None).await.unwrap();
         assert!(url.contains("/test/test.file?"))
@@ -3865,7 +3887,7 @@ mod test {
     )]
     async fn test_presign_delete() {
         let s3_path = "/test/test.file";
-        let bucket = test_minio_bucket();
+        let bucket = test_presign_bucket();
 
         let url = bucket.presign_delete(s3_path, 86400).await.unwrap();
         assert!(url.contains("/test/test.file?"))
