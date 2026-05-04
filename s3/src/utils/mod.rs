@@ -433,39 +433,54 @@ mod test {
     use std::fs::File;
     use std::io::Cursor;
     use std::io::prelude::*;
+    use std::path::PathBuf;
 
     fn object(size: u32) -> Vec<u8> {
         (0..size).map(|_| 33).collect()
     }
 
+    fn etag_test_path(test_name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+
+        path.push(format!(
+            "rust-s3-{test_name}-{}-{unique}",
+            std::process::id()
+        ));
+        path
+    }
+
     #[test]
     fn test_etag_large_file() {
-        let path = "test_etag";
-        std::fs::remove_file(path).unwrap_or(());
+        let path = etag_test_path("etag-large-file");
+        std::fs::remove_file(&path).unwrap_or(());
         let test: Vec<u8> = object(10_000_000);
 
-        let mut file = File::create(path).unwrap();
+        let mut file = File::create(&path).unwrap();
         file.write_all(&test).unwrap();
 
-        let etag = etag_for_path(path).unwrap();
+        let etag = etag_for_path(&path).unwrap();
 
-        std::fs::remove_file(path).unwrap_or(());
+        std::fs::remove_file(&path).unwrap_or(());
 
         assert_eq!(etag, "e438487f09f09c042b2de097765e5ac2-2");
     }
 
     #[test]
     fn test_etag_small_file() {
-        let path = "test_etag";
-        std::fs::remove_file(path).unwrap_or(());
+        let path = etag_test_path("etag-small-file");
+        std::fs::remove_file(&path).unwrap_or(());
         let test: Vec<u8> = object(1000);
 
-        let mut file = File::create(path).unwrap();
+        let mut file = File::create(&path).unwrap();
         file.write_all(&test).unwrap();
 
-        let etag = etag_for_path(path).unwrap();
+        let etag = etag_for_path(&path).unwrap();
 
-        std::fs::remove_file(path).unwrap_or(());
+        std::fs::remove_file(&path).unwrap_or(());
 
         assert_eq!(etag, "8122ef1c2b2331f7986349560248cf56");
     }
