@@ -12,7 +12,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use time::OffsetDateTime;
-use url::Url;
+use url::{Host, Url};
 
 /// AWS access credentials: access key, secret key, and optional token.
 ///
@@ -187,18 +187,46 @@ fn http_get(url: &str) -> attohttpc::Result<attohttpc::Response> {
     builder.send()
 }
 
+// EKS Pod Identity Agent link-local addresses documented by AWS:
+// https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html#pod-id-considerations
+#[cfg(feature = "http-credentials")]
+const EKS_POD_IDENTITY_AGENT_IPV4: [u8; 4] = [169, 254, 170, 23];
+#[cfg(feature = "http-credentials")]
+const EKS_POD_IDENTITY_AGENT_IPV6: [u16; 8] = [0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x23];
+
 /// Reads the container authorization token from environment.
 /// Checks `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` first (file path), then
 /// `AWS_CONTAINER_AUTHORIZATION_TOKEN`. Used when fetching credentials from
 /// `AWS_CONTAINER_CREDENTIALS_FULL_URI` (e.g. EKS Pod Identity Agent).
 #[cfg(feature = "http-credentials")]
-fn get_container_authorization_token() -> Option<String> {
+fn get_container_authorization_token() -> Result<Option<String>, CredentialsError> {
     if let Ok(path) = env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE") {
-        if let Ok(token) = std::fs::read_to_string(path) {
-            return Some(token.trim_end().to_string());
-        }
+        let token = std::fs::read_to_string(path)?;
+        return Ok(Some(token.trim_end().to_string()));
     }
-    env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN").ok()
+    Ok(env::var("AWS_CONTAINER_AUTHORIZATION_TOKEN").ok())
+}
+
+/// Returns whether it is safe to send a container authorization token to `url`.
+#[cfg(feature = "http-credentials")]
+fn validate_container_credentials_full_uri_for_auth_token(
+    url: &str,
+) -> Result<(), CredentialsError> {
+    let parsed = Url::parse(url)?;
+
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(CredentialsError::InvalidContainerCredentialsFullUri(
+            url.to_string(),
+        ));
+    }
+
+    match parsed.host() {
+        Some(Host::Ipv4(ip)) if ip.octets() == EKS_POD_IDENTITY_AGENT_IPV4 => Ok(()),
+        Some(Host::Ipv6(ip)) if ip.segments() == EKS_POD_IDENTITY_AGENT_IPV6 => Ok(()),
+        _ => Err(CredentialsError::InvalidContainerCredentialsFullUri(
+            url.to_string(),
+        )),
+    }
 }
 
 impl Credentials {
@@ -353,7 +381,10 @@ impl Credentials {
             if let Ok(relative_uri) = env::var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") {
                 (format!("http://169.254.170.2{}", relative_uri), None)
             } else if let Ok(full_uri) = env::var("AWS_CONTAINER_CREDENTIALS_FULL_URI") {
-                let token = get_container_authorization_token();
+                let token = get_container_authorization_token()?;
+                if token.is_some() {
+                    validate_container_credentials_full_uri_for_auth_token(&full_uri)?;
+                }
                 (full_uri, token)
             } else {
                 return Err(CredentialsError::NotContainer);
@@ -680,9 +711,26 @@ aws_secret_access_key = SECRET
         let _guard = EnvGuard::set("AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE", &path);
         let _u = EnvGuard::remove(&["AWS_CONTAINER_AUTHORIZATION_TOKEN"]);
         assert_eq!(
-            get_container_authorization_token(),
+            get_container_authorization_token().unwrap(),
             Some("token-from-file".to_string())
         );
+    }
+
+    #[cfg(feature = "http-credentials")]
+    #[test]
+    fn test_get_container_authorization_token_file_error_does_not_fallback_to_env() {
+        let _lock = CONTAINER_CREDENTIALS_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+        let _guard_file = EnvGuard::set(
+            "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+            "/path/that/does/not/exist/token",
+        );
+        let _guard_env = EnvGuard::set("AWS_CONTAINER_AUTHORIZATION_TOKEN", "token-from-env");
+
+        let result = get_container_authorization_token();
+        assert!(matches!(result, Err(CredentialsError::Io(_))));
     }
 
     #[cfg(feature = "http-credentials")]
@@ -695,7 +743,7 @@ aws_secret_access_key = SECRET
         let _guard = EnvGuard::set("AWS_CONTAINER_AUTHORIZATION_TOKEN", "token-from-env");
         let _u = EnvGuard::remove(&["AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"]);
         assert_eq!(
-            get_container_authorization_token(),
+            get_container_authorization_token().unwrap(),
             Some("token-from-env".to_string())
         );
     }
@@ -715,9 +763,68 @@ aws_secret_access_key = SECRET
         let _guard_env = EnvGuard::set("AWS_CONTAINER_AUTHORIZATION_TOKEN", "token-from-env");
         // File takes precedence over env var.
         assert_eq!(
-            get_container_authorization_token(),
+            get_container_authorization_token().unwrap(),
             Some("token-from-file".to_string())
         );
+    }
+
+    #[cfg(feature = "http-credentials")]
+    #[test]
+    fn test_container_credentials_rejects_auth_token_for_untrusted_full_uri() {
+        let _lock = CONTAINER_CREDENTIALS_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap();
+        let _rel = EnvGuard::remove(&["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"]);
+        let _full = EnvGuard::set(
+            "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+            "https://example.com/v1/credentials",
+        );
+        let _token = EnvGuard::set("AWS_CONTAINER_AUTHORIZATION_TOKEN", "token-from-env");
+        let _file = EnvGuard::remove(&["AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE"]);
+
+        let result = Credentials::from_container_credentials_provider();
+        assert!(matches!(
+            result,
+            Err(CredentialsError::InvalidContainerCredentialsFullUri(_))
+        ));
+    }
+
+    #[cfg(feature = "http-credentials")]
+    #[test]
+    fn test_container_credentials_auth_token_full_uri_allowlist() {
+        assert!(validate_container_credentials_full_uri_for_auth_token(
+            "http://169.254.170.23/v1/credentials",
+        )
+        .is_ok());
+        assert!(validate_container_credentials_full_uri_for_auth_token(
+            "http://[fd00:ec2::23]/v1/credentials",
+        )
+        .is_ok());
+        assert!(matches!(
+            validate_container_credentials_full_uri_for_auth_token(
+                "http://169.254.170.24/v1/credentials",
+            ),
+            Err(CredentialsError::InvalidContainerCredentialsFullUri(_))
+        ));
+        assert!(matches!(
+            validate_container_credentials_full_uri_for_auth_token(
+                "http://localhost/v1/credentials",
+            ),
+            Err(CredentialsError::InvalidContainerCredentialsFullUri(_))
+        ));
+        assert!(matches!(
+            validate_container_credentials_full_uri_for_auth_token(
+                "http://127.0.0.1/v1/credentials",
+            ),
+            Err(CredentialsError::InvalidContainerCredentialsFullUri(_))
+        ));
+        assert!(matches!(
+            validate_container_credentials_full_uri_for_auth_token(
+                "ftp://localhost/v1/credentials",
+            ),
+            Err(CredentialsError::InvalidContainerCredentialsFullUri(_))
+        ));
     }
 }
 
