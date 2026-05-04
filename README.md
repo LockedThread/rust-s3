@@ -26,7 +26,7 @@ a `PUT` presigned URL, meaning they can upload to a specific key in S3 for the d
 
 ```toml
 [dependencies]
-rust-s3 = "0.37.1"
+rust-s3 = "0.37.2"
 ```
 
 Read and run examples from the `examples` folder, make sure you have valid credentials for the variant you're running.
@@ -134,6 +134,7 @@ Each `GET` method has a `PUT` companion `sync` and `async` methods are generic o
 |                             |                                                                                                   |
 | --------------------------- | ------------------------------------------------------------------------------------------------- |
 | `async/sync/async-blocking` | [delete_object](https://docs.rs/rust-s3/latest/s3/bucket/struct.Bucket.html#method.delete_object) |
+| `async/sync/async-blocking` | [delete_objects](https://docs.rs/rust-s3/latest/s3/bucket/struct.Bucket.html#method.delete_objects) |
 
 #### Location
 

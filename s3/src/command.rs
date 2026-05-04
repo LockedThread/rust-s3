@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use crate::error::S3Error;
 use crate::serde_types::{
     BucketLifecycleConfiguration, CompleteMultipartUploadData, CorsConfiguration,
+    DeleteObjectsRequest,
 };
 
 use crate::EMPTY_PAYLOAD_SHA;
@@ -171,6 +172,9 @@ pub enum Command<'a> {
         expected_bucket_owner: String,
         version_id: Option<String>,
     },
+    DeleteObjects {
+        data: DeleteObjectsRequest,
+    },
 }
 
 impl<'a> Command<'a> {
@@ -203,9 +207,9 @@ impl<'a> Command<'a> {
             | Command::DeleteBucket
             | Command::DeleteBucketCors { .. }
             | Command::DeleteBucketLifecycle => HttpMethod::Delete,
-            Command::InitiateMultipartUpload { .. } | Command::CompleteMultipartUpload { .. } => {
-                HttpMethod::Post
-            }
+            Command::InitiateMultipartUpload { .. }
+            | Command::CompleteMultipartUpload { .. }
+            | Command::DeleteObjects { .. } => HttpMethod::Post,
             Command::HeadObject => HttpMethod::Head,
             Command::GetObjectAttributes { .. } => HttpMethod::Get,
         }
@@ -252,6 +256,7 @@ impl<'a> Command<'a> {
             Command::GetBucketLifecycle => 0,
             Command::DeleteBucketLifecycle { .. } => 0,
             Command::GetObjectAttributes { .. } => 0,
+            Command::DeleteObjects { data } => data.len(),
         };
         Ok(result)
     }
@@ -289,6 +294,7 @@ impl<'a> Command<'a> {
             Command::UploadPart { .. } => "text/plain".into(),
             Command::CreateBucket { .. } => "text/plain".into(),
             Command::GetObjectAttributes { .. } => "text/plain".into(),
+            Command::DeleteObjects { .. } => "application/xml".into(),
         }
     }
 
@@ -353,6 +359,11 @@ impl<'a> Command<'a> {
             Command::UploadPart { .. } => EMPTY_PAYLOAD_SHA.into(),
             Command::InitiateMultipartUpload { .. } => EMPTY_PAYLOAD_SHA.into(),
             Command::GetObjectAttributes { .. } => EMPTY_PAYLOAD_SHA.into(),
+            Command::DeleteObjects { data } => {
+                let mut sha = Sha256::default();
+                sha.update(data.to_string().as_bytes());
+                hex::encode(sha.finalize().as_slice())
+            }
         };
         Ok(result)
     }

@@ -11,3 +11,4 @@ test.file
 .envrc
 minio
 .vscode
+.claude/
