@@ -711,6 +711,7 @@ pub trait Request {
             }
             Command::ListObjects { .. } => {}
             Command::ListObjectsV2 { .. } => {}
+            Command::HeadObject => {}
             Command::GetObject => {}
             Command::GetObjectTagging => {}
             Command::GetBucketLocation => {}

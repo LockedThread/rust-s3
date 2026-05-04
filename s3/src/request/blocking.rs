@@ -240,4 +240,29 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn head_object_omits_body_headers_from_request_and_signature() -> Result<()> {
+        let region = "custom-region".parse()?;
+        let bucket = Bucket::new("my-first-bucket", region, fake_credentials())?;
+        let request = AttoRequest::new(&bucket, "/my-first/path", Command::HeadObject).unwrap();
+
+        let headers = request.headers().unwrap();
+
+        assert!(!headers.contains_key("Content-Length"));
+        assert!(!headers.contains_key("Content-Type"));
+        assert!(headers.contains_key("x-amz-content-sha256"));
+
+        let authorization = headers.get("Authorization").unwrap().to_str()?;
+        let signed_headers = authorization
+            .split("SignedHeaders=")
+            .nth(1)
+            .and_then(|value| value.split(',').next())
+            .unwrap();
+
+        assert!(!signed_headers.contains("content-length"));
+        assert!(!signed_headers.contains("content-type"));
+
+        Ok(())
+    }
 }
