@@ -819,12 +819,12 @@ impl Bucket {
     ///
     /// # fn example() -> Result<(), S3Error> {
     /// let bucket = Bucket::new("my-bucket", Region::from_str("us-east-1")?, Credentials::default()?)?
-    ///     .set_dangereous_config(true, true)?;
+    ///     .set_dangerous_config(true, true)?;
     /// # Ok(())
     /// # }
-    ///
+    /// ```
     #[cfg(any(feature = "tokio-native-tls", feature = "tokio-rustls-tls"))]
-    pub fn set_dangereous_config(
+    pub fn set_dangerous_config(
         &self,
         accept_invalid_certs: bool,
         accept_invalid_hostnames: bool,
@@ -845,6 +845,20 @@ impl Bucket {
             http_client: client(&options)?,
             client_options: options,
         })
+    }
+
+    /// Deprecated alias for [`Bucket::set_dangerous_config`].
+    #[deprecated(
+        since = "0.37.3",
+        note = "use `set_dangerous_config`; this misspelled method remains for compatibility"
+    )]
+    #[cfg(any(feature = "tokio-native-tls", feature = "tokio-rustls-tls"))]
+    pub fn set_dangereous_config(
+        &self,
+        accept_invalid_certs: bool,
+        accept_invalid_hostnames: bool,
+    ) -> Result<Bucket, S3Error> {
+        self.set_dangerous_config(accept_invalid_certs, accept_invalid_hostnames)
     }
 
     #[cfg(feature = "with-tokio")]
@@ -3173,6 +3187,34 @@ mod test {
         assert_eq!(requests.load(Ordering::SeqCst), 1);
     }
 
+    #[test]
+    #[cfg(any(feature = "tokio-native-tls", feature = "tokio-rustls-tls"))]
+    #[allow(deprecated)]
+    fn dangerous_config_correct_spelling_and_compat_alias_set_same_options() {
+        let bucket = Bucket::new(
+            "test-bucket",
+            Region::Custom {
+                region: "test-region".to_owned(),
+                endpoint: "https://example.com".to_owned(),
+            },
+            Credentials::anonymous().unwrap(),
+        )
+        .unwrap();
+
+        let corrected = bucket.set_dangerous_config(true, true).unwrap();
+        let deprecated_alias = bucket.set_dangereous_config(true, true).unwrap();
+
+        assert!(corrected.client_options.accept_invalid_certs);
+        assert!(corrected.client_options.accept_invalid_hostnames);
+        assert_eq!(
+            corrected.client_options.accept_invalid_certs,
+            deprecated_alias.client_options.accept_invalid_certs
+        );
+        assert_eq!(
+            corrected.client_options.accept_invalid_hostnames,
+            deprecated_alias.client_options.accept_invalid_hostnames
+        );
+    }
     fn test_aws_credentials() -> Credentials {
         Credentials::new(
             Some(&env::var("EU_AWS_ACCESS_KEY_ID").unwrap()),
@@ -4398,7 +4440,7 @@ mod test {
             .with_path_style();
 
         // Set dangerous config (allow invalid certs, allow invalid hostnames)
-        let bucket = bucket.set_dangereous_config(true, true).unwrap();
+        let bucket = bucket.set_dangerous_config(true, true).unwrap();
 
         // Test that exists() works with the dangerous config
         // This should not panic or fail due to SSL certificate issues
