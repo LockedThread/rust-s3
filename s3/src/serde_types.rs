@@ -404,6 +404,107 @@ pub struct AwsError {
     pub request_id: String,
 }
 
+/// Represents a single object identifier for the bulk delete request.
+#[derive(Debug, Clone)]
+pub struct ObjectIdentifier {
+    /// The key of the object to delete.
+    pub key: String,
+    /// The version ID of the object to delete (optional).
+    pub version_id: Option<String>,
+}
+
+impl ObjectIdentifier {
+    pub fn new(key: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            version_id: None,
+        }
+    }
+
+    pub fn with_version(key: impl Into<String>, version_id: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            version_id: Some(version_id.into()),
+        }
+    }
+}
+
+/// Request body for the DeleteObjects (bulk delete) API.
+#[derive(Debug, Clone)]
+pub struct DeleteObjectsRequest {
+    pub objects: Vec<ObjectIdentifier>,
+    /// If true, the response only includes errors (Quiet mode).
+    pub quiet: bool,
+}
+
+impl fmt::Display for DeleteObjectsRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/">"#
+        )
+        .expect("Can't fail");
+        if self.quiet {
+            write!(f, "<Quiet>true</Quiet>").expect("Can't fail");
+        }
+        for obj in &self.objects {
+            let escaped_key = quick_xml::escape::escape(&obj.key);
+            write!(f, "<Object><Key>{}</Key>", escaped_key).expect("Can't fail");
+            if let Some(ref vid) = obj.version_id {
+                let escaped_vid = quick_xml::escape::escape(vid);
+                write!(f, "<VersionId>{}</VersionId>", escaped_vid).expect("Can't fail");
+            }
+            write!(f, "</Object>").expect("Can't fail");
+        }
+        write!(f, "</Delete>")
+    }
+}
+
+impl DeleteObjectsRequest {
+    pub fn len(&self) -> usize {
+        self.to_string().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty()
+    }
+}
+
+/// A single deleted object in the DeleteObjects response.
+#[derive(Deserialize, Debug, Clone)]
+pub struct DeletedObject {
+    #[serde(rename = "Key")]
+    pub key: String,
+    #[serde(rename = "VersionId")]
+    pub version_id: Option<String>,
+    #[serde(rename = "DeleteMarker")]
+    pub delete_marker: Option<bool>,
+    #[serde(rename = "DeleteMarkerVersionId")]
+    pub delete_marker_version_id: Option<String>,
+}
+
+/// A single error entry in the DeleteObjects response.
+#[derive(Deserialize, Debug, Clone)]
+pub struct DeleteError {
+    #[serde(rename = "Key")]
+    pub key: String,
+    #[serde(rename = "Code")]
+    pub code: String,
+    #[serde(rename = "Message")]
+    pub message: String,
+    #[serde(rename = "VersionId")]
+    pub version_id: Option<String>,
+}
+
+/// The parsed result of a DeleteObjects (bulk delete) response.
+#[derive(Deserialize, Debug, Clone)]
+pub struct DeleteObjectsResult {
+    #[serde(rename = "Deleted", default)]
+    pub deleted: Vec<DeletedObject>,
+    #[serde(rename = "Error", default)]
+    pub errors: Vec<DeleteError>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename = "CORSConfiguration")]
 pub struct CorsConfiguration {
@@ -808,7 +909,9 @@ mod test {
         LifecycleRule, NoncurrentVersionExpiration, NoncurrentVersionTransition, Transition,
     };
 
-    use super::{CorsConfiguration, CorsRule};
+    use super::{
+        CorsConfiguration, CorsRule, DeleteObjectsRequest, DeleteObjectsResult, ObjectIdentifier,
+    };
 
     #[test]
     fn cors_config_serde() {
@@ -875,5 +978,107 @@ mod test {
             se,
             r#"<LifecycleConfiguration><Rule><AbortIncompleteMultipartUpload><DaysAfterInitiation>30</DaysAfterInitiation></AbortIncompleteMultipartUpload><Expiration><Date>2024-06-017</Date><Days>30</Days><ExpiredObjectDeleteMarker>true</ExpiredObjectDeleteMarker></Expiration><Filter><ObjectSizeGreaterThan>10</ObjectSizeGreaterThan><ObjectSizeLessThan>50</ObjectSizeLessThan></Filter><ID>lala</ID><NoncurrentVersionExpiration><NewerNoncurrentVersions>30</NewerNoncurrentVersions><NoncurrentDays>30</NoncurrentDays></NoncurrentVersionExpiration><NoncurrentVersionTransition><NewerNoncurrentVersions>30</NewerNoncurrentVersions><NoncurrentDays>30</NoncurrentDays><StorageClass>GLACIER</StorageClass></NoncurrentVersionTransition><Status>Enabled</Status><Transition><Date>2024-06-017</Date><Days>30</Days><StorageClass>GLACIER</StorageClass></Transition></Rule></LifecycleConfiguration>"#
         )
+    }
+
+    #[test]
+    fn delete_objects_request_serialize() {
+        let request = DeleteObjectsRequest {
+            objects: vec![
+                ObjectIdentifier::new("file1.txt"),
+                ObjectIdentifier::new("file2.txt"),
+                ObjectIdentifier::with_version("file3.txt", "v1"),
+            ],
+            quiet: false,
+        };
+
+        let se = request.to_string();
+        assert_eq!(
+            se,
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>file1.txt</Key></Object><Object><Key>file2.txt</Key></Object><Object><Key>file3.txt</Key><VersionId>v1</VersionId></Object></Delete>"#
+        )
+    }
+
+    #[test]
+    fn delete_objects_request_serialize_quiet() {
+        let request = DeleteObjectsRequest {
+            objects: vec![ObjectIdentifier::new("file1.txt")],
+            quiet: true,
+        };
+
+        let se = request.to_string();
+        assert_eq!(
+            se,
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Quiet>true</Quiet><Object><Key>file1.txt</Key></Object></Delete>"#
+        )
+    }
+
+    #[test]
+    fn delete_objects_request_xml_escaping() {
+        let request = DeleteObjectsRequest {
+            objects: vec![ObjectIdentifier::new("file&name<>.txt")],
+            quiet: false,
+        };
+
+        let se = request.to_string();
+        assert_eq!(
+            se,
+            r#"<Delete xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Object><Key>file&amp;name&lt;&gt;.txt</Key></Object></Delete>"#
+        )
+    }
+
+    #[test]
+    fn delete_objects_request_len() {
+        let request = DeleteObjectsRequest {
+            objects: vec![ObjectIdentifier::new("file1.txt")],
+            quiet: false,
+        };
+
+        assert_eq!(request.len(), request.to_string().len());
+        assert!(!request.is_empty());
+    }
+
+    #[test]
+    fn delete_objects_result_deserialize() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Deleted>
+    <Key>file1.txt</Key>
+  </Deleted>
+  <Deleted>
+    <Key>file2.txt</Key>
+    <DeleteMarker>true</DeleteMarker>
+    <DeleteMarkerVersionId>abc123</DeleteMarkerVersionId>
+  </Deleted>
+  <Error>
+    <Key>file3.txt</Key>
+    <Code>AccessDenied</Code>
+    <Message>Access Denied</Message>
+  </Error>
+</DeleteResult>"#;
+
+        let result: DeleteObjectsResult = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(result.deleted.len(), 2);
+        assert_eq!(result.deleted[0].key, "file1.txt");
+        assert_eq!(result.deleted[1].key, "file2.txt");
+        assert_eq!(result.deleted[1].delete_marker, Some(true));
+        assert_eq!(
+            result.deleted[1].delete_marker_version_id,
+            Some("abc123".to_string())
+        );
+        assert_eq!(result.errors.len(), 1);
+        assert_eq!(result.errors[0].key, "file3.txt");
+        assert_eq!(result.errors[0].code, "AccessDenied");
+        assert_eq!(result.errors[0].message, "Access Denied");
+    }
+
+    #[test]
+    fn delete_objects_result_deserialize_empty() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+</DeleteResult>"#;
+
+        let result: DeleteObjectsResult = quick_xml::de::from_str(xml).unwrap();
+        assert_eq!(result.deleted.len(), 0);
+        assert_eq!(result.errors.len(), 0);
     }
 }

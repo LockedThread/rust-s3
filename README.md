@@ -134,6 +134,7 @@ Each `GET` method has a `PUT` companion `sync` and `async` methods are generic o
 |                             |                                                                                                   |
 | --------------------------- | ------------------------------------------------------------------------------------------------- |
 | `async/sync/async-blocking` | [delete_object](https://docs.rs/rust-s3/latest/s3/bucket/struct.Bucket.html#method.delete_object) |
+| `async/sync/async-blocking` | [delete_objects](https://docs.rs/rust-s3/latest/s3/bucket/struct.Bucket.html#method.delete_objects) |
 
 #### Location
 

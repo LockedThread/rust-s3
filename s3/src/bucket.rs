@@ -90,8 +90,9 @@ use crate::error::S3Error;
 use crate::post_policy::PresignedPost;
 use crate::serde_types::{
     BucketLifecycleConfiguration, BucketLocationResult, CompleteMultipartUploadData,
-    CorsConfiguration, GetObjectAttributesOutput, HeadObjectResult,
-    InitiateMultipartUploadResponse, ListBucketResult, ListMultipartUploadsResult, Part,
+    CorsConfiguration, DeleteObjectsRequest, DeleteObjectsResult, GetObjectAttributesOutput,
+    HeadObjectResult, InitiateMultipartUploadResponse, ListBucketResult,
+    ListMultipartUploadsResult, ObjectIdentifier, Part,
 };
 #[allow(unused_imports)]
 use crate::utils::{PutStreamResponse, error_from_response_data};
@@ -2116,6 +2117,92 @@ impl Bucket {
         request.response_data(false).await
     }
 
+    /// Delete multiple objects from S3 using the Multi-Object Delete API.
+    ///
+    /// If more than 1000 objects are provided, they are automatically batched
+    /// into multiple requests (S3 allows at most 1000 keys per request).
+    /// Results from all batches are combined into a single response.
+    ///
+    /// # Example:
+    ///
+    /// ```no_run
+    /// use s3::bucket::Bucket;
+    /// use s3::creds::Credentials;
+    /// use s3::serde_types::ObjectIdentifier;
+    /// use anyhow::Result;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<()> {
+    ///
+    /// let bucket_name = "rust-s3-test";
+    /// let region = "us-east-1".parse()?;
+    /// let credentials = Credentials::default()?;
+    /// let bucket = Bucket::new(bucket_name, region, credentials)?;
+    ///
+    /// let objects = vec![
+    ///     ObjectIdentifier::new("file1.txt"),
+    ///     ObjectIdentifier::new("file2.txt"),
+    ///     ObjectIdentifier::new("file3.txt"),
+    /// ];
+    ///
+    /// // Async variant with `tokio` or `async-std` features
+    /// let response = bucket.delete_objects(objects).await?;
+    ///
+    /// // `sync` feature will produce an identical method
+    /// #[cfg(feature = "sync")]
+    /// let response = bucket.delete_objects(objects)?;
+    ///
+    /// // Blocking variant, generated with `blocking` feature in combination
+    /// // with `tokio` or `async-std` features.
+    /// #[cfg(feature = "blocking")]
+    /// let response = bucket.delete_objects_blocking(objects)?;
+    /// #
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[maybe_async::maybe_async]
+    pub async fn delete_objects<I: Into<Vec<ObjectIdentifier>>>(
+        &self,
+        objects: I,
+    ) -> Result<DeleteObjectsResult, S3Error> {
+        let objects = objects.into();
+        let mut result = DeleteObjectsResult {
+            deleted: Vec::new(),
+            errors: Vec::new(),
+        };
+
+        // Strip leading '/' from keys to match library convention.
+        // Other methods (put_object, delete_object, etc.) strip the leading
+        // slash when building the URL; we do the same for the XML body.
+        let objects: Vec<ObjectIdentifier> = objects
+            .into_iter()
+            .map(|mut obj| {
+                if let Some(stripped) = obj.key.strip_prefix('/') {
+                    obj.key = stripped.to_string();
+                }
+                obj
+            })
+            .collect();
+
+        for chunk in objects.chunks(1000) {
+            let data = DeleteObjectsRequest {
+                objects: chunk.to_vec(),
+                quiet: false,
+            };
+            let command = Command::DeleteObjects { data };
+            let request = RequestImpl::new(self, "/", command).await?;
+            let response_data = request.response_data(false).await?;
+            if response_data.status_code() >= 300 {
+                return Err(error_from_response_data(response_data)?);
+            }
+            let msg: DeleteObjectsResult = quick_xml::de::from_str(response_data.as_str()?)?;
+            result.deleted.extend(msg.deleted);
+            result.errors.extend(msg.errors);
+        }
+
+        Ok(result)
+    }
+
     /// Head object from S3.
     ///
     /// # Example:
@@ -3782,6 +3869,64 @@ mod test {
     async fn r2_test_put_head_get_delete_object() {
         put_head_get_delete_object(*test_r2_bucket(), false).await;
         put_head_delete_object_with_headers(*test_r2_bucket()).await;
+    }
+
+    #[maybe_async::maybe_async]
+    async fn put_delete_objects(bucket: Bucket) {
+        use crate::serde_types::ObjectIdentifier;
+
+        let paths = [
+            "/+bulk_delete_1.file",
+            "/+bulk_delete_2.file",
+            "/+bulk_delete_3.file",
+        ];
+        let test: Vec<u8> = object(128);
+
+        // Put test objects
+        for path in &paths {
+            let response_data = bucket.put_object(*path, &test).await.unwrap();
+            assert_eq!(response_data.status_code(), 200);
+        }
+
+        // Bulk delete them
+        let objects: Vec<ObjectIdentifier> =
+            paths.iter().map(|p| ObjectIdentifier::new(*p)).collect();
+        let result = bucket.delete_objects(objects).await.unwrap();
+
+        assert_eq!(result.deleted.len(), 3);
+        assert!(result.errors.is_empty());
+
+        // Verify they are gone
+        for path in &paths {
+            let exists = bucket.object_exists(*path).await.unwrap();
+            assert!(!exists);
+        }
+    }
+
+    #[ignore]
+    #[maybe_async::test(
+        feature = "sync",
+        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+        async(
+            all(not(feature = "sync"), feature = "with-async-std"),
+            async_std::test
+        )
+    )]
+    async fn aws_test_delete_objects() {
+        put_delete_objects(*test_aws_bucket()).await;
+    }
+
+    #[ignore]
+    #[maybe_async::test(
+        feature = "sync",
+        async(all(not(feature = "sync"), feature = "with-tokio"), tokio::test),
+        async(
+            all(not(feature = "sync"), feature = "with-async-std"),
+            async_std::test
+        )
+    )]
+    async fn minio_test_delete_objects() {
+        put_delete_objects(*test_minio_bucket()).await;
     }
 
     #[maybe_async::test(
