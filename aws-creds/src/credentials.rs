@@ -375,6 +375,26 @@ impl Credentials {
     /// `AWS_CONTAINER_CREDENTIALS_FULL_URI` (EKS Pod Identity Agent, etc.).
     /// When using `FULL_URI`, optionally sends an `Authorization` header from
     /// `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` or `AWS_CONTAINER_AUTHORIZATION_TOKEN`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use awscreds::Credentials;
+    ///
+    /// // ECS task role credentials use a relative path on the ECS metadata host.
+    /// std::env::set_var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "/v2/credentials/task-role");
+    /// let credentials = Credentials::from_container_credentials_provider()?;
+    ///
+    /// // EKS Pod Identity uses a full URI and may require an authorization token.
+    /// std::env::remove_var("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI");
+    /// std::env::set_var(
+    ///     "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    ///     "http://169.254.170.23/v1/credentials",
+    /// );
+    /// std::env::set_var("AWS_CONTAINER_AUTHORIZATION_TOKEN", "pod-identity-token");
+    /// let credentials = Credentials::from_container_credentials_provider()?;
+    /// # Ok::<(), awscreds::error::CredentialsError>(())
+    /// ```
     #[cfg(feature = "http-credentials")]
     pub fn from_container_credentials_provider() -> Result<Credentials, CredentialsError> {
         let (url, auth_token) =
