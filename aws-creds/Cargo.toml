@@ -9,6 +9,7 @@ keywords = ["AWS", "S3", "Wasabi", "Minio", "R2"]
 license = "MIT"
 documentation = "https://docs.rs/aws-creds/latest/awscreds/"
 edition = "2021"
+rust-version = "1.88.0"
 
 [lib]
 name = "awscreds"
